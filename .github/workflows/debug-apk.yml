@@ -104,7 +104,7 @@ jobs:
         run: |
           export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
           echo "Running: ./gradlew ${{ steps.build_task.outputs.gradle_task }}"
-          ./gradlew ${{ steps.build_task.outputs.gradle_task }} --no-daemon --console=plain
+          ./gradlew ${{ steps.build_task.outputs.gradle_task }} --no-daemon --console=plain --info 2>&1 | tail -100
 
       - name: Find and verify APK
         id: apk
