@@ -251,7 +251,7 @@ sealed interface RuntimeEvent {
         override val sessionId: String,
         val success: Boolean,
         val previewUrl: String?,
-        val deploymentUrl: String,
+        val deploymentUrl: String?,
     ) : RuntimeEvent
 }
 
