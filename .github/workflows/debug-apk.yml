@@ -18,6 +18,8 @@ on:
 env:
   JAVA_VERSION: '17'
   GRADLE_VERSION: '8.14.3'
+  ANDROID_SDK_ROOT: '/usr/local/lib/android/sdk'
+  ANDROID_HOME: '/usr/local/lib/android/sdk'
 
 jobs:
   build:
@@ -41,13 +43,31 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          api-level: 36
-          build-tools-version: 35.0.0
-          ndk-version: r26d
-          cmdline-tools: latest
+      - name: Set up Android SDK (manual)
+        run: |
+          # Install Android SDK manually to avoid deprecated 'tools' package issue
+          sudo apt-get update -qq && sudo apt-get install -qq -y wget unzip 2>/dev/null
+          
+          CMDLINE_TOOLS_URL="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+          SDK_ROOT="${{ env.ANDROID_SDK_ROOT }}"
+          
+          mkdir -p "$SDK_ROOT/cmdline-tools"
+          cd "$SDK_ROOT/cmdline-tools"
+          wget -q "$CMDLINE_TOOLS_URL" -O cmdline-tools.zip
+          unzip -q cmdline-tools.zip
+          mv cmdline-tools latest
+          rm cmdline-tools.zip
+          
+          # Add to PATH
+          export PATH="$SDK_ROOT/cmdline-tools/latest/bin:$SDK_ROOT/platform-tools:$PATH"
+          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          
+          # Accept licenses and install required packages
+          yes | sdkmanager --licenses >/dev/null 2>&1
+          sdkmanager "platforms;android-36" "build-tools;35.0.0" "ndk;26.1.10909125" "platform-tools" >/dev/null
+          
+          echo "Android SDK installed at $SDK_ROOT"
 
       - name: Detect Gradle project
         id: detect
@@ -78,7 +98,11 @@ jobs:
 
       - name: Build Debug APK
         working-directory: ${{ steps.detect.outputs.project_root }}
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
         run: |
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
           echo "Running: ./gradlew ${{ steps.build_task.outputs.gradle_task }}"
           ./gradlew ${{ steps.build_task.outputs.gradle_task }} --no-daemon --console=plain
 
