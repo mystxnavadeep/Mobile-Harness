@@ -104,18 +104,23 @@ jobs:
         run: |
           export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
           echo "Running: ./gradlew ${{ steps.build_task.outputs.gradle_task }}"
-          ./gradlew ${{ steps.build_task.outputs.gradle_task }} --no-daemon --console=plain --info 2>&1 | tail -100
+          ./gradlew ${{ steps.build_task.outputs.gradle_task }} --no-daemon --console=plain
 
       - name: Find and verify APK
         id: apk
         working-directory: ${{ steps.detect.outputs.project_root }}
         run: |
           FLAVOR="${{ steps.build_task.outputs.flavor }}"
-          APK_PATTERN="**/outputs/apk/${FLAVOR}/debug/*.apk"
-          APKS=$(find . -path "$APK_PATTERN" -name "*.apk" | grep -v "unsigned" | grep -v "unaligned" || true)
+          # Search more broadly for the APK
+          APKS=$(find . -type f -name "*.apk" -path "*/outputs/apk/*" | grep -v "unsigned" | grep -v "unaligned" | grep -i "${FLAVOR}" | grep -i "debug" || true)
+          if [ -z "$APKS" ]; then
+            # Fallback: search all debug APKs
+            APKS=$(find . -type f -name "*debug*.apk" -path "*/outputs/apk/*" | grep -v "unsigned" | grep -v "unaligned" || true)
+          fi
           if [ -z "$APKS" ]; then
             echo "No $FLAVOR debug APK found"
-            echo "Searched pattern: $APK_PATTERN"
+            echo "All APKs found:"
+            find . -type f -name "*.apk" -path "*/outputs/apk/*" | head -20
             exit 1
           fi
           FIRST_APK=$(echo "$APKS" | head -1)
