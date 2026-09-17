@@ -629,7 +629,10 @@ private fun RuntimeSetupPromptScreen(
     val memoryInfo = remember { ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo) }
     val totalRamGb = memoryInfo.totalMem / 1_073_741_824L
     val arm64 = Build.SUPPORTED_64_BIT_ABIS.any { it == "arm64-v8a" }
-    val compatible = arm64 && totalRamGb >= 4
+    // ARM64 is a hard requirement (arm64-only native libs). Low RAM is not:
+    // 3 GB devices continue in Lite Mode (cloud-first, no heavy local toolchains).
+    val compatible = arm64
+    val liteMode = totalRamGb < 8
 
     var currentStep by remember { mutableIntStateOf(0) }
     val setupScrollState = rememberScrollState()
@@ -733,7 +736,7 @@ private fun RuntimeSetupPromptScreen(
                                 border = BorderStroke(0.5.dp, if (compatible) PocketGreen.copy(alpha = 0.35f) else MaterialTheme.colorScheme.error.copy(alpha = 0.35f)),
                             ) {
                                 Text(
-                                    text = if (compatible) "Verified" else "Unsupported",
+                                    text = if (compatible) "Verified" else "Not available on this architecture",
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
@@ -747,8 +750,8 @@ private fun RuntimeSetupPromptScreen(
                         SpecRow(
                             icon = Icons.Default.Memory,
                             label = "Memory (RAM)",
-                            value = "$totalRamGb GB · ${if (totalRamGb >= 8) "Full mode (8GB+)" else "Lite mode"}",
-                            statusOk = totalRamGb >= 4,
+                            value = "$totalRamGb GB · ${if (liteMode) "Lite mode (cloud-first)" else "Full mode"}",
+                            statusOk = true,
                         )
 
                         SpecRow(
@@ -761,7 +764,7 @@ private fun RuntimeSetupPromptScreen(
                         SpecRow(
                             icon = Icons.Default.Storage,
                             label = "Download",
-                            value = "149–774 MB · depends on selected tools",
+                            value = if (liteMode) "149 MB · Lite mode (cloud builds)" else "149 MB · cloud builds included",
                             statusOk = true,
                         )
                     }
@@ -833,7 +836,7 @@ private fun RuntimeSetupPromptScreen(
                         horizontalArrangement = Arrangement.Center,
                     ) {
                         Text(
-                            text = if (compatible) "Continue to Tool Setup" else "Device not supported",
+                            text = if (compatible) "Continue to Tool Setup" else "Requires an ARM64 device",
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp,
                         )
@@ -961,7 +964,7 @@ private fun RuntimeSetupPromptScreen(
                         )
                         Spacer(Modifier.width(10.dp))
                         Text(
-                            text = if (compatible) "Install Mobile Harness" else "Device not supported",
+                            text = if (compatible) "Install Mobile Harness" else "Requires an ARM64 device",
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp,
                         )
@@ -1616,14 +1619,26 @@ private fun DeviceCheckStep(context: Context, onContinue: () -> Unit) {
     val memoryInfo = remember { ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo) }
     val totalRamGb = memoryInfo.totalMem / 1_073_741_824L
     val arm64 = Build.SUPPORTED_64_BIT_ABIS.any { it == "arm64-v8a" }
-    val compatible = arm64 && totalRamGb >= 4
+    // ARM64 is a hard requirement (arm64-only native libs). Low RAM is not:
+    // 3 GB devices continue in Lite Mode (cloud-first, no heavy local toolchains).
+    val compatible = arm64
+    val liteMode = totalRamGb < 8
     Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
         BrandMark()
         Text("Your phone is the workspace", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text("Mobile Harness checks compatibility before downloading the private Linux runtime.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        CheckRow(Icons.Default.Memory, "Memory", "$totalRamGb GB · ${if (totalRamGb >= 8) "Full mode" else "Lite mode"}", totalRamGb >= 4)
+        CheckRow(Icons.Default.Memory, "Memory", "$totalRamGb GB · ${if (liteMode) "Lite mode" else "Full mode"}", true)
         CheckRow(Icons.Default.Code, "Processor", Build.SUPPORTED_ABIS.firstOrNull() ?: "Unknown", arm64)
         CheckRow(Icons.Default.Storage, "Android", "Android ${Build.VERSION.RELEASE}", true)
+        if (liteMode) {
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp)) {
+                Text(
+                    "Lite Mode enabled for $totalRamGb GB RAM — heavy toolchains stay in the cloud (GitHub Actions builds, Vercel previews).",
+                    modifier = Modifier.padding(16.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp)) {
             Text(
                 "Only open projects you trust. The local Linux environment is a compatibility layer, not a hardened security sandbox.",
@@ -1632,7 +1647,7 @@ private fun DeviceCheckStep(context: Context, onContinue: () -> Unit) {
             )
         }
         Button(onClick = onContinue, enabled = compatible, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-            Text(if (compatible) "Continue" else "This device is not supported")
+            Text(if (compatible) "Continue" else "Requires an ARM64 device")
         }
     }
 }
