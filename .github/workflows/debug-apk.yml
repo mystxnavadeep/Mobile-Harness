@@ -65,7 +65,7 @@ jobs:
           
           # Accept licenses and install required packages
           yes | sdkmanager --licenses >/dev/null 2>&1
-          sdkmanager "platforms;android-36" "build-tools;35.0.0" "ndk;26.1.10909125" "platform-tools" >/dev/null
+          sdkmanager "platforms;android-36" "build-tools;35.0.0" "ndk;26.1.10909125" "cmake;3.22.1" "platform-tools" >/dev/null
           
           echo "Android SDK installed at $SDK_ROOT"
 
