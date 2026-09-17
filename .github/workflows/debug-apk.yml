@@ -47,6 +47,7 @@ jobs:
           api-level: 36
           build-tools-version: 35.0.0
           ndk-version: r26d
+          cmdline-tools: latest
 
       - name: Detect Gradle project
         id: detect
