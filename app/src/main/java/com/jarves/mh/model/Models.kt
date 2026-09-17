@@ -34,7 +34,7 @@ data class ProviderProfile(
 enum class ProjectKind { PROJECT, QUICK_PROJECT }
 
 /** Build mode for Android projects */
-enum class BuildMode {
+enum class BuildMode(val label: String, val description: String) {
     LOCAL("Local Development", "Build APKs directly on this device (requires Android toolchain)"),
     CLOUD("Cloud Build (GitHub Actions)", "Build APKs on GitHub Actions servers — no local Android SDK needed"),
 }

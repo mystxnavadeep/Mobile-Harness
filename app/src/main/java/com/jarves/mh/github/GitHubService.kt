@@ -2,6 +2,7 @@ package com.jarves.mh.github
 
 import com.jarves.mh.data.ApiKeyVault
 import com.jarves.mh.data.AppPreferences
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -130,7 +131,8 @@ class GitHubService(private val context: android.content.Context) {
         val response = request("GET", "/repos/$owner/$repo/contents/$path$refQuery", token)
         check(response.code in 200..299) { "Failed to get contents: ${response.body}" }
         val array = JSONArray(response.body)
-        return array.mapIndexed { _, obj ->
+        (0 until array.length()).map { index ->
+            val obj = array.getJSONObject(index)
             GitHubContent(
                 name = obj.getString("name"),
                 path = obj.getString("path"),
@@ -153,7 +155,7 @@ class GitHubService(private val context: android.content.Context) {
         val obj = JSONObject(response.body)
         val content = obj.optString("content", "")
         val encoding = obj.optString("encoding", "")
-        return if (encoding == "base64" && content.isNotBlank()) {
+        if (encoding == "base64" && content.isNotBlank()) {
             String(Base64.getDecoder().decode(content))
         } else {
             content
@@ -241,7 +243,8 @@ class GitHubService(private val context: android.content.Context) {
         check(response.code in 200..299) { "Failed to get workflow runs: ${response.body}" }
         val obj = JSONObject(response.body)
         val array = obj.getJSONArray("workflow_runs")
-        return array.mapIndexed { _, run ->
+        (0 until array.length()).map { index ->
+            val run = array.getJSONObject(index)
             GitHubWorkflowRun(
                 id = run.getLong("id"),
                 name = run.getString("name"),
@@ -286,7 +289,7 @@ class GitHubService(private val context: android.content.Context) {
     ): String = withContext(Dispatchers.IO) {
         val token = getToken() ?: error("GitHub token not configured")
         val response = request("GET", "/repos/$owner/$repo/actions/runs/$runId/logs", token)
-        if (response.code !in 200..299) return ""
+        if (response.code !in 200..299) return@withContext ""
         // The logs API returns a zip file - we'd need to parse it
         // For now, return empty string - proper implementation would unzip and read
         ""
@@ -299,7 +302,8 @@ class GitHubService(private val context: android.content.Context) {
         check(response.code in 200..299) { "Failed to get artifacts: ${response.body}" }
         val obj = JSONObject(response.body)
         val array = obj.getJSONArray("artifacts")
-        return array.mapIndexed { _, artifact ->
+        (0 until array.length()).map { index ->
+            val artifact = array.getJSONObject(index)
             GitHubArtifact(
                 id = artifact.getLong("id"),
                 name = artifact.getString("name"),
@@ -352,7 +356,7 @@ class GitHubService(private val context: android.content.Context) {
     suspend fun hasWorkflowFile(owner: String, repo: String, workflowPath: String, branch: String = "main"): Boolean = withContext(Dispatchers.IO) {
         val token = getToken() ?: error("GitHub token not configured")
         val response = request("GET", "/repos/$owner/$repo/contents/$workflowPath?ref=$branch", token)
-        return response.code in 200..299
+        response.code in 200..299
     }
 
     /** Create or update workflow file for Android builds. */
@@ -396,7 +400,10 @@ class GitHubService(private val context: android.content.Context) {
         val responseBody = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
         connection.disconnect()
         HttpResult(code, responseBody)
-    }.getOrElse { HttpResult(0, "", it.message ?: "Network error") }
+    }.getOrElse {
+        if (it is CancellationException) throw it
+        HttpResult(0, "", it.message ?: "Network error")
+    }
 
     private data class HttpResult(val code: Int, val body: String, val error: String? = null)
 }
@@ -497,7 +504,7 @@ object BuildApkWorkflow {
               - name: Set up JDK 17
                 uses: actions/setup-java@v4
                 with:
-                  java-version: \${{ env.JAVA_VERSION }}
+                  java-version: ${'$'}{{ env.JAVA_VERSION }}
                   distribution: 'temurin'
                   cache: gradle
         
@@ -513,58 +520,58 @@ object BuildApkWorkflow {
                 run: |
                   # Find the Gradle project root (where settings.gradle or settings.gradle.kts is)
                   PROJECT_ROOT=$(find . -name "settings.gradle*" -not -path "*/build/*" -not -path "*/.gradle/*" | head -1 | xargs dirname)
-                  if [ -z "$PROJECT_ROOT" ]; then
+                  if [ -z "${'$'}PROJECT_ROOT" ]; then
                     echo "No Gradle project found"
                     exit 1
                   fi
-                  echo "project_root=$PROJECT_ROOT" >> $GITHUB_OUTPUT
-                  echo "Found Gradle project at: $PROJECT_ROOT"
+                  echo "project_root=${'$'}PROJECT_ROOT" >> ${'$'}GITHUB_OUTPUT
+                  echo "Found Gradle project at: ${'$'}PROJECT_ROOT"
         
               - name: Make gradlew executable
-                run: chmod +x \${{ steps.detect.outputs.project_root }}/gradlew
+                run: chmod +x ${'$'}{{ steps.detect.outputs.project_root }}/gradlew
         
               - name: Build with Gradle
-                working-directory: \${{ steps.detect.outputs.project_root }}
+                working-directory: ${'$'}{{ steps.detect.outputs.project_root }}
                 run: |
-                  GRADLE_TASK="\${{ github.event.inputs.gradle_task }}"
-                  if [ -z "$GRADLE_TASK" ]; then
-                    if [ "\${{ github.event.inputs.build_type }}" = "release" ]; then
+                  GRADLE_TASK="${'$'}{{ github.event.inputs.gradle_task }}"
+                  if [ -z "${'$'}GRADLE_TASK" ]; then
+                    if [ "${'$'}{{ github.event.inputs.build_type }}" = "release" ]; then
                       GRADLE_TASK="assembleRelease"
                     else
                       GRADLE_TASK="assembleDebug"
                     fi
                   fi
-                  echo "Running: ./gradlew $GRADLE_TASK"
-                  ./gradlew $GRADLE_TASK --no-daemon --console=plain
+                  echo "Running: ./gradlew ${'$'}GRADLE_TASK"
+                  ./gradlew ${'$'}GRADLE_TASK --no-daemon --console=plain
         
               - name: Find APK artifacts
                 id: apks
-                working-directory: \${{ steps.detect.outputs.project_root }}
+                working-directory: ${'$'}{{ steps.detect.outputs.project_root }}
                 run: |
                   APKS=$(find . -name "*.apk" -path "*/outputs/apk/*" | grep -v "unsigned" | grep -v "unaligned" || true)
-                  if [ -z "$APKS" ]; then
+                  if [ -z "${'$'}APKS" ]; then
                     echo "No APK files found"
                     exit 1
                   fi
                   echo "Found APKs:"
-                  echo "$APKS"
+                  echo "${'$'}APKS"
                   # Output the first APK as primary artifact
-                  FIRST_APK=$(echo "$APKS" | head -1)
-                  echo "apk_path=$FIRST_APK" >> $GITHUB_OUTPUT
+                  FIRST_APK=$(echo "${'$'}APKS" | head -1)
+                  echo "apk_path=${'$'}FIRST_APK" >> ${'$'}GITHUB_OUTPUT
         
               - name: Upload APK artifact
                 uses: actions/upload-artifact@v4
                 with:
-                  name: app-apk-\${{ github.event.inputs.build_type }}
-                  path: \${{ steps.detect.outputs.project_root }}/\${{ steps.apks.outputs.apk_path }}
+                  name: app-apk-${'$'}{{ github.event.inputs.build_type }}
+                  path: ${'$'}{{ steps.detect.outputs.project_root }}/${'$'}{{ steps.apks.outputs.apk_path }}
                   retention-days: 30
         
               - name: Upload all APKs
                 if: always()
                 uses: actions/upload-artifact@v4
                 with:
-                  name: all-apks-\${{ github.event.inputs.build_type }}
-                  path: \${{ steps.detect.outputs.project_root }}/**/outputs/apk/**/*.apk
+                  name: all-apks-${'$'}{{ github.event.inputs.build_type }}
+                  path: ${'$'}{{ steps.detect.outputs.project_root }}/**/outputs/apk/**/*.apk
                   retention-days: 30
         
         """.trimIndent()

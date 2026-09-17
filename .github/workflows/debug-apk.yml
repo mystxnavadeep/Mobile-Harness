@@ -1,228 +1,133 @@
-name: Debug APK
+name: Debug APK Build
 
 on:
   workflow_dispatch:
     inputs:
       build_variant:
-        description: 'Build variant (flavor)'
+        description: Build variant
         required: false
-        default: 'online'
+        default: online
         type: choice
         options:
           - online
-          - offline
   push:
-    branches:
-      - main
+    branches: [main]
 
-env:
-  JAVA_VERSION: '17'
-  GRADLE_VERSION: '8.14.3'
-  ANDROID_SDK_ROOT: '/usr/local/lib/android/sdk'
-  ANDROID_HOME: '/usr/local/lib/android/sdk'
+permissions:
+  contents: read
+
+concurrency:
+  group: debug-apk-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    name: Build Debug APK
+    name: Build Online Debug APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    permissions:
-      contents: read
-      actions: read
-
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: Checkout repository
+      - name: Checkout source and native dependencies
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
-          java-version: ${{ env.JAVA_VERSION }}
-          distribution: 'temurin'
+          distribution: temurin
+          java-version: '17'
           cache: gradle
 
-      - name: Set up Android SDK (manual)
+      - name: Install Android SDK packages on runner only
         run: |
-          # Install Android SDK manually to avoid deprecated 'tools' package issue
-          sudo apt-get update -qq && sudo apt-get install -qq -y wget unzip 2>/dev/null
-          
-          CMDLINE_TOOLS_URL="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
-          SDK_ROOT="${{ env.ANDROID_SDK_ROOT }}"
-          
-          mkdir -p "$SDK_ROOT/cmdline-tools"
-          cd "$SDK_ROOT/cmdline-tools"
-          wget -q "$CMDLINE_TOOLS_URL" -O cmdline-tools.zip
-          unzip -q cmdline-tools.zip
-          mv cmdline-tools latest
-          rm cmdline-tools.zip
-          
-          # Add to PATH
-          export PATH="$SDK_ROOT/cmdline-tools/latest/bin:$SDK_ROOT/platform-tools:$PATH"
-          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$SDK_ROOT/platform-tools" >> $GITHUB_PATH
-          
-          # Accept licenses and install required packages
-          yes | sdkmanager --licenses >/dev/null 2>&1
-          sdkmanager "platforms;android-36" "build-tools;35.0.0" "ndk;26.1.10909125" "cmake;3.22.1" "platform-tools" >/dev/null
-          
-          echo "Android SDK installed at $SDK_ROOT"
+          # ubuntu-latest provides SDK command-line tools. No tools are added to the app runtime.
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          # Ignore only yes's expected SIGPIPE; preserve sdkmanager's exit status.
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          set -o pipefail
+          "$SDKMANAGER" "platforms;android-36" "build-tools;35.0.0" "ndk;26.1.10909125" "cmake;3.22.1" "platform-tools"
 
-      - name: Detect Gradle project
-        id: detect
-        run: |
-          PROJECT_ROOT=$(find . -name "settings.gradle*" -not -path "*/build/*" -not -path "*/.gradle/*" | head -1 | xargs dirname)
-          if [ -z "$PROJECT_ROOT" ]; then
-            echo "No Gradle project found"
-            exit 1
-          fi
-          echo "project_root=$PROJECT_ROOT" >> $GITHUB_OUTPUT
-          echo "Found Gradle project at: $PROJECT_ROOT"
-
-      - name: Make gradlew executable
-        run: chmod +x ${{ steps.detect.outputs.project_root }}/gradlew
-
-      - name: Determine build task
-        id: build_task
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            FLAVOR="${{ github.event.inputs.build_variant }}"
-          else
-            FLAVOR="online"
-          fi
-          echo "flavor=$FLAVOR" >> $GITHUB_OUTPUT
-          GRADLE_TASK="assemble${FLAVOR^}Debug"
-          echo "gradle_task=$GRADLE_TASK" >> $GITHUB_OUTPUT
-          echo "Building $FLAVOR debug variant with task: $GRADLE_TASK"
-
-      - name: Build Debug APK
-        working-directory: ${{ steps.detect.outputs.project_root }}
+      - name: Verify Online Debug task
         env:
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          BUILD_VARIANT: ${{ inputs.build_variant || 'online' }}
         run: |
-          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
-          echo "Running: ./gradlew ${{ steps.build_task.outputs.gradle_task }}"
-          ./gradlew ${{ steps.build_task.outputs.gradle_task }} --no-daemon --console=plain
+          test "$BUILD_VARIANT" = online || { echo 'Only the lightweight online variant is allowed'; exit 1; }
+          chmod +x gradlew
+          # Configuration defines :app, runtimeDelivery=online, and debug.
+          ./gradlew :app:tasks --all --no-daemon --console=plain > "$RUNNER_TEMP/gradle-tasks.txt"
+          grep -E '^assembleOnlineDebug([[:space:]]|$)' "$RUNNER_TEMP/gradle-tasks.txt"
 
-      - name: Find and verify APK
+      - name: Build Online Debug APK
+        run: ./gradlew :app:assembleOnlineDebug --no-daemon --console=plain --stacktrace
+
+      - name: Validate and prepare APK
         id: apk
-        working-directory: ${{ steps.detect.outputs.project_root }}
         run: |
-          FLAVOR="${{ steps.build_task.outputs.flavor }}"
-          # Search more broadly for the APK
-          APKS=$(find . -type f -name "*.apk" -path "*/outputs/apk/*" | grep -v "unsigned" | grep -v "unaligned" | grep -i "${FLAVOR}" | grep -i "debug" || true)
-          if [ -z "$APKS" ]; then
-            # Fallback: search all debug APKs
-            APKS=$(find . -type f -name "*debug*.apk" -path "*/outputs/apk/*" | grep -v "unsigned" | grep -v "unaligned" || true)
-          fi
-          if [ -z "$APKS" ]; then
-            echo "No $FLAVOR debug APK found"
-            echo "All APKs found:"
-            find . -type f -name "*.apk" -path "*/outputs/apk/*" | head -20
+          mapfile -d '' APKS < <(find app/build/outputs/apk -type f -path '*/online/debug/*.apk' ! -name '*unsigned*' ! -name '*unaligned*' -print0)
+          if [ "${#APKS[@]}" -ne 1 ]; then
+            echo "Expected one online debug APK; found ${#APKS[@]}"
             exit 1
           fi
-          FIRST_APK=$(echo "$APKS" | head -1)
-          SIZE=$(stat -c%s "$FIRST_APK")
-          if [ "$SIZE" -eq 0 ]; then
-            echo "APK is empty: $FIRST_APK"
-            exit 1
+          APK="${APKS[0]}"
+          test -s "$APK" || { echo 'APK is empty'; exit 1; }
+          echo "Generated APK: $APK"
+          unzip -t "$APK" > /dev/null
+          TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          "$TOOLS/apksigner" verify --verbose --print-certs "$APK"
+          PACKAGE=unknown
+          VERSION_NAME=unknown
+          VERSION_CODE=unknown
+          ABI=unknown
+          if [ -x "$TOOLS/aapt2" ]; then
+            BADGING=$("$TOOLS/aapt2" dump badging "$APK")
+            printf '%s\n' "$BADGING"
+            PACKAGE=$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<< "$BADGING")
+            VERSION_NAME=$(sed -n "s/^package: .*versionName='\([^']*\)'.*/\1/p" <<< "$BADGING")
+            VERSION_CODE=$(sed -n "s/^package: .*versionCode='\([^']*\)'.*/\1/p" <<< "$BADGING")
+            ABI=$(sed -n 's/^native-code: //p' <<< "$BADGING")
+            test "$PACKAGE" = com.jarves.mh
+            test "$ABI" = "'arm64-v8a'"
+          else
+            echo '::warning::aapt2 unavailable; optional metadata inspection skipped'
           fi
-          echo "Found APK: $FIRST_APK ($SIZE bytes)"
-          echo "apk_path=$FIRST_APK" >> $GITHUB_OUTPUT
-          echo "apk_size=$SIZE" >> $GITHUB_OUTPUT
-
-      - name: Calculate SHA-256
-        id: sha256
-        working-directory: ${{ steps.detect.outputs.project_root }}
-        run: |
-          SHA256=$(sha256sum "${{ steps.apk.outputs.apk_path }}" | cut -d' ' -f1)
-          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+          mkdir -p debug-artifact
+          DEST=debug-artifact/Mobile-Harness-Lite-online-debug.apk
+          cp "$APK" "$DEST"
+          SIZE=$(stat -c%s "$DEST")
+          SHA256=$(sha256sum "$DEST" | cut -d' ' -f1)
+          echo "APK size: $SIZE bytes"
           echo "SHA-256: $SHA256"
+          echo "path=$DEST" >> "$GITHUB_OUTPUT"
+          {
+            echo '# Mobile-Harness-Lite Debug APK'
+            echo
+            echo 'Build: Online Debug'
+            echo
+            echo 'APK: Mobile-Harness-Lite-online-debug.apk'
+            echo
+            echo "APK Size: $SIZE bytes"
+            echo
+            echo "SHA-256: $SHA256"
+            echo
+            echo "Package: $PACKAGE"
+            echo
+            echo "Version: $VERSION_NAME (code $VERSION_CODE)"
+            echo
+            echo "ABI: $ABI"
+            echo
+            echo 'This is a debug APK intended for testing and is not a production release.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Inspect APK metadata
-        id: version
-        working-directory: ${{ steps.detect.outputs.project_root }}
-        run: |
-          if command -v aapt2 &> /dev/null; then
-            AAPT2=aapt2
-          elif command -v aapt &> /dev/null; then
-            AAPT2=aapt
-          else
-            echo "aapt/aapt2 not found, skipping APK inspection"
-            echo "package=unknown" >> $GITHUB_OUTPUT
-            echo "version_code=unknown" >> $GITHUB_OUTPUT
-            echo "version_name=unknown" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          BADGING=$($AAPT2 dump badging "${{ steps.apk.outputs.apk_path }}" 2>/dev/null | head -30)
-          echo "APK badging output:"
-          echo "$BADGING"
-          PACKAGE=$(echo "$BADGING" | grep -oP "package: name='\K[^']*" || echo "unknown")
-          VERSION_CODE=$(echo "$BADGING" | grep -oP "versionCode='\K[^']*" || echo "unknown")
-          VERSION_NAME=$(echo "$BADGING" | grep -oP "versionName='\K[^']*" || echo "unknown")
-          echo "package=$PACKAGE" >> $GITHUB_OUTPUT
-          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
-          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
-
-      - name: Rename APK for artifact
-        id: rename_apk
-        run: |
-          FLAVOR="${{ steps.build_task.outputs.flavor }}"
-          VERSION="${{ steps.version.outputs.version_name }}"
-          if [ "$VERSION" = "unknown" ] || [ -z "$VERSION" ]; then
-            NEW_NAME="Mobile-Harness-Lite-${FLAVOR}-debug.apk"
-          else
-            NEW_NAME="Mobile-Harness-Lite-v${VERSION}-${FLAVOR}-debug.apk"
-          fi
-          cp "${{ steps.apk.outputs.apk_path }}" "./$NEW_NAME"
-          echo "renamed_apk=$NEW_NAME" >> $GITHUB_OUTPUT
-
-      - name: Upload APK as artifact
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: Mobile-Harness-Lite-${{ steps.build_task.outputs.flavor }}-debug-apk
-          path: ${{ steps.detect.outputs.project_root }}/${{ steps.apk.outputs.apk_path }}
+          name: Mobile-Harness-Lite-online-debug-apk
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
           retention-days: 7
-
-      - name: Job Summary
-        run: |
-          FLAVOR="${{ steps.build_task.outputs.flavor }}"
-          APK_SIZE="${{ steps.apk.outputs.apk_size }}"
-          SHA256="${{ steps.sha256.outputs.sha256 }}"
-          PACKAGE="${{ steps.version.outputs.package }}"
-          VERSION_CODE="${{ steps.version.outputs.version_code }}"
-          VERSION_NAME="${{ steps.version.outputs.version_name }}"
-          RENAMED="${{ steps.rename_apk.outputs.renamed_apk }}"
-
-          # Format size
-          if command -v numfmt &> /dev/null; then
-            SIZE_FMT=$(numfmt --to=iec-i --suffix=B "${APK_SIZE:-0}")
-          else
-            SIZE_FMT="${APK_SIZE:-0} bytes"
-          fi
-
-          {
-            echo "# Mobile-Harness-Lite Debug APK"
-            echo ""
-            echo "**Build Variant:** ${FLAVOR} Debug"
-            echo ""
-            echo "**APK:** \`${RENAMED}\`"
-            echo ""
-            echo "**APK Size:** ${SIZE_FMT}"
-            echo ""
-            echo "**SHA-256:** \`${SHA256}\`"
-            echo ""
-            echo "**Package:** \`${PACKAGE}\`"
-            echo ""
-            echo "**Version Code:** ${VERSION_CODE}"
-            echo ""
-            echo "**Version Name:** ${VERSION_NAME}"
-            echo ""
-            echo "---"
-            echo ""
-            echo "> **This is a debug APK intended for testing and is not a production release.**"
-            echo ""
-            echo "> Debug APKs are signed with Android's default debug keystore and are not suitable for distribution."
-          } >> $GITHUB_STEP_SUMMARY

@@ -107,6 +107,9 @@ import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudQueue
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.OpenInNew
+import com.jarves.mh.model.GitHubRepoLink
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -312,6 +315,10 @@ fun PocketDevApp(viewModel: MainViewModel = viewModel()) {
             onOpenAttachment = viewModel::openChatAttachment,
             onBuildApkCloud = viewModel::buildApkCloud,
             onDeployToVercel = viewModel::deployToVercel,
+            onCancelBuild = viewModel::cancelCloudBuild,
+            onCancelVercel = viewModel::cancelVercelDeploy,
+            onRefreshBuild = viewModel::refreshCloudBuild,
+            onOpenGitHubActions = viewModel::openGitHubActions,
         )
         else -> RootScreenHost(state, viewModel, projectsListState)
     }
@@ -605,26 +612,6 @@ private fun getDevStackVisuals(stack: DevStack): DevStackVisuals = when (stack) 
         icon = Icons.Default.Language,
         accentColor = Color(0xFF38BDF8),
         tag = "HTML · CSS · JS · TS",
-    )
-    DevStack.PYTHON -> DevStackVisuals(
-        icon = Icons.Default.Terminal,
-        accentColor = Color(0xFFFBBF24),
-        tag = "python3 + pip + venv",
-    )
-    DevStack.ANDROID -> DevStackVisuals(
-        icon = Icons.Default.Android,
-        accentColor = Color(0xFF4ADE80),
-        tag = "OpenJDK build tools",
-    )
-    DevStack.CPP -> DevStackVisuals(
-        icon = Icons.Default.Memory,
-        accentColor = Color(0xFFA78BFA),
-        tag = "gcc + g++ + cmake",
-    )
-    DevStack.PHP -> DevStackVisuals(
-        icon = Icons.Default.Dns,
-        accentColor = Color(0xFF818CF8),
-        tag = "php-cli + Composer",
     )
 }
 
@@ -942,7 +929,7 @@ private fun RuntimeSetupPromptScreen(
                     Icon(Icons.Default.Storage, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(15.dp))
                     Spacer(Modifier.width(7.dp))
                     Text(
-                        toolchainDownloadSummary(selectedStacks),
+                        toolchainDownloadSummary(),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                     )
@@ -992,53 +979,15 @@ private fun RuntimeSetupPromptScreen(
 }
 
 private const val CORE_RUNTIME_DOWNLOAD_MB = 149
-private const val PYTHON_RUNTIME_DOWNLOAD_MB = 55
-private const val ANDROID_RUNTIME_DOWNLOAD_MB = 570
+private fun setupTimeEstimate(): String = "3–5 minutes"
 
-private fun setupTimeEstimate(selected: Set<DevStack>): String {
-    var minimumMinutes = 3
-    var maximumMinutes = 5
-    if (DevStack.PYTHON in selected) {
-        minimumMinutes += 1
-        maximumMinutes += 2
-    }
-    if (DevStack.ANDROID in selected) {
-        minimumMinutes += 7
-        maximumMinutes += 10
-    }
-    if (DevStack.CPP in selected) {
-        minimumMinutes += 3
-        maximumMinutes += 5
-    }
-    if (DevStack.PHP in selected) {
-        minimumMinutes += 2
-        maximumMinutes += 4
-    }
-    return "$minimumMinutes–$maximumMinutes minutes"
+private fun stackDownloadLabel(stack: DevStack): String = when (stack) {
+    DevStack.WEB -> " · included"
 }
 
-private fun stackDownloadLabel(stack: DevStack): String = when {
-    stack == DevStack.WEB -> " · included"
-    BuildConfig.OFFLINE_RUNTIME_BUNDLES && stack in setOf(DevStack.PYTHON, DevStack.ANDROID) -> " · included"
-    !BuildConfig.OFFLINE_RUNTIME_BUNDLES && stack == DevStack.PYTHON -> " · 55 MB"
-    !BuildConfig.OFFLINE_RUNTIME_BUNDLES && stack == DevStack.ANDROID -> " · 570 MB"
-    else -> ""
-}
-
-private fun toolchainDownloadSummary(selected: Set<DevStack>): String {
-    if (BuildConfig.OFFLINE_RUNTIME_BUNDLES) return "All selected bundles are included in this offline app"
-    val total = CORE_RUNTIME_DOWNLOAD_MB +
-        (if (DevStack.PYTHON in selected) PYTHON_RUNTIME_DOWNLOAD_MB else 0) +
-        (if (DevStack.ANDROID in selected) ANDROID_RUNTIME_DOWNLOAD_MB else 0)
-    val laterPackages = selected.intersect(setOf(DevStack.CPP, DevStack.PHP))
-    return buildString {
-        append("Download: ")
-        append(total)
-        append(" MB")
-        if (laterPackages.isNotEmpty()) append(" · C/PHP packages download later")
-        if (total >= 500) append(" · Wi-Fi recommended")
-    }
-}
+private fun toolchainDownloadSummary(): String =
+    if (BuildConfig.OFFLINE_RUNTIME_BUNDLES) "Core runtime is included in this offline app"
+    else "Download: $CORE_RUNTIME_DOWNLOAD_MB MB · Web tools included"
 
 @Composable
 private fun DevStackChoiceRow(
@@ -1050,10 +999,6 @@ private fun DevStackChoiceRow(
     val visuals = getDevStackVisuals(stack)
     val conciseDescription = when (stack) {
         DevStack.WEB -> "Included with the Core runtime"
-        DevStack.PYTHON -> "Scripts, automation and backends"
-        DevStack.ANDROID -> "Java and Kotlin build tools"
-        DevStack.CPP -> "Native apps and command-line tools"
-        DevStack.PHP -> "PHP sites and Laravel projects"
     }
 
     Row(
@@ -1244,7 +1189,7 @@ private fun StartupLoadingScreen(
                     Spacer(Modifier.height(10.dp))
                     Row(Modifier.fillMaxWidth().height(18.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (installing) "Estimated ${setupTimeEstimate(state.selectedDevStacks)}" else "Starting local tools",
+                            if (installing) "Estimated ${setupTimeEstimate()}" else "Starting local tools",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 11.5.sp,
                         )
@@ -2666,6 +2611,10 @@ private fun WorkspaceScreen(
     onOpenAttachment: (ChatAttachment) -> Unit,
     onBuildApkCloud: () -> Unit,
     onDeployToVercel: () -> Unit,
+    onCancelBuild: () -> Unit,
+    onCancelVercel: () -> Unit,
+    onRefreshBuild: () -> Unit,
+    onOpenGitHubActions: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
@@ -2942,10 +2891,10 @@ private fun WorkspaceScreen(
                     isOnline = state.isOnline,
                     onBuildApk = onBuildApkCloud,
                     onDeployToVercel = onDeployToVercel,
-                    onCancelBuild = viewModel::cancelCloudBuild,
-                    onCancelVercel = viewModel::cancelVercelDeploy,
-                    onRefreshBuild = viewModel::refreshCloudBuild,
-                    onOpenGitHubActions = viewModel::openGitHubActions,
+                    onCancelBuild = onCancelBuild,
+                    onCancelVercel = onCancelVercel,
+                    onRefreshBuild = onRefreshBuild,
+                    onOpenGitHubActions = onOpenGitHubActions,
                 )
             }
         }
@@ -4216,6 +4165,7 @@ private fun BuildTab(
     onRefreshBuild: () -> Unit,
     onOpenGitHubActions: () -> Unit,
 ) {
+    val context = LocalContext.current
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         // Network status indicator
         if (!isOnline) {
@@ -4408,7 +4358,6 @@ private fun BuildTab(
                             OutlinedButton(
                                 onClick = {
                                     runCatching {
-                                        val context = LocalContext.current
                                         val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(vercelDeployPreviewUrl!!))
                                         context.startActivity(intent)
                                     }
@@ -4430,7 +4379,7 @@ private fun BuildTab(
             EmptyState(
                 icon = Icons.Default.CloudOff,
                 title = "No project to build",
-                subtitle = "Open an Android or web project to use cloud build and deploy.",
+                body = "Open an Android or web project to use cloud build and deploy.",
             )
         }
     }

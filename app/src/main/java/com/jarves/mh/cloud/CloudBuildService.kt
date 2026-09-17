@@ -10,8 +10,10 @@ import com.jarves.mh.model.ProjectDetectionResult
 import com.jarves.mh.model.ProjectDetector
 import com.jarves.mh.runtime.InstalledRuntime
 import com.jarves.mh.runtime.NativeSpawnProcess
-import com.jarves.mh.runtime.RuntimeEvent
+import com.jarves.mh.model.RuntimeEvent
+import com.jarves.mh.model.CloudBuildStatus
 import com.jarves.mh.runtime.RuntimeInstaller
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -195,7 +197,8 @@ class CloudBuildService(private val context: Context) {
             artifactUrl = apkArtifact.archiveDownloadUrl,
             runUrl = finalRun.htmlUrl,
         )
-    }.catch { e ->
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
         val errorMessage = when {
             e.message?.contains("401") == true || e.message?.contains("Unauthorized") == true ->
                 "GitHub authentication failed (401). Check your token has 'repo' and 'workflow' scopes."

@@ -270,6 +270,100 @@ class RuntimeInstaller(private val context: Context) {
         onProgress(RuntimeInstallProgress("${stack.label} installed", to))
     }
 
+    private fun stripMacosMetadataArtifacts(root: File) {
+        if (!root.isDirectory) return
+        val queue = ArrayDeque<File>()
+        queue.add(root)
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            for (child in current.listFiles().orEmpty()) {
+                if (child.name.startsWith("._")) {
+                    if (child.isDirectory && !java.nio.file.Files.isSymbolicLink(child.toPath())) {
+                        child.deleteRecursively()
+                    } else child.delete()
+                } else if (child.isDirectory && !java.nio.file.Files.isSymbolicLink(child.toPath())) {
+                    queue.add(child)
+                }
+            }
+        }
+    }
+
+    private suspend fun obtainRuntimeBundle(
+        bundle: RuntimeBundle,
+        preferEmbedded: Boolean,
+        from: Float,
+        to: Float,
+        onProgress: suspend (RuntimeInstallProgress) -> Unit,
+    ): File {
+        downloads.mkdirs()
+        val destination = File(downloads, bundle.fileName)
+        if (preferEmbedded || BuildConfig.OFFLINE_RUNTIME_BUNDLES) {
+            onProgress(RuntimeInstallProgress("Loading ${bundle.label} bundle", from, 0, bundle.compressedBytes))
+            val temporary = File(downloads, "${bundle.fileName}.part")
+            context.assets.open("runtime/${bundle.fileName}").use { input ->
+                FileOutputStream(temporary).use { output ->
+                    val buffer = ByteArray(256 * 1024)
+                    var copied = 0L
+                    while (true) {
+                        coroutineContext.ensureActive()
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                        copied += count
+                        val ratio = (copied.toFloat() / bundle.compressedBytes).coerceIn(0f, 1f)
+                        onProgress(RuntimeInstallProgress("Loading ${bundle.label} bundle", from + ratio * (to - from), copied, bundle.compressedBytes))
+                    }
+                }
+            }
+            require(digest(temporary, "SHA-256").equals(bundle.sha256, ignoreCase = true)) {
+                "${bundle.label} bundle checksum mismatch"
+            }
+            if (destination.exists()) destination.delete()
+            check(temporary.renameTo(destination)) { "Could not stage the ${bundle.label} bundle" }
+            return destination
+        }
+        val url = "${BuildConfig.RUNTIME_RELEASE_BASE_URL}/${bundle.fileName}"
+        downloadVerified(url, destination, bundle.sha256) { downloaded, total ->
+            val ratio = if (total > 0) downloaded.toFloat() / total else 0f
+            onProgress(RuntimeInstallProgress("Downloading ${bundle.label} bundle", from + ratio * (to - from), downloaded, total.takeIf { it > 0 }))
+        }
+        return destination
+    }
+
+    /** Core already supplies WEB tools; never migrate heavy legacy stacks. */
+    fun migrateLegacyToolMarkers() {
+        if (!File(rootfs, "usr/bin/bash").isFile) return
+        if (isStackInstalled(DevStack.WEB)) {
+            writeDevStackState(mapOf(DevStack.WEB.name to true))
+        }
+    }
+
+    fun installedStacks(): Set<DevStack> = DevStack.entries.filter(::isStackInstalled).toSet()
+
+    fun isStackInstalled(stack: DevStack): Boolean = when (stack) {
+        DevStack.WEB -> File(rootfs, "usr/local/bin/node").exists() &&
+            File(rootfs, "usr/local/bin/npm").exists()
+    }
+
+    private fun readDevStackState(): MutableMap<String, Boolean> {
+        if (!devStacksFile.isFile) return mutableMapOf()
+        return runCatching {
+            val obj = JSONObject(devStacksFile.readText())
+            mutableMapOf<String, Boolean>().apply {
+                DevStack.entries.forEach { stack ->
+                    if (obj.has(stack.name)) put(stack.name, obj.optBoolean(stack.name))
+                }
+            }
+        }.getOrDefault(mutableMapOf())
+    }
+
+    private fun writeDevStackState(state: Map<String, Boolean>) {
+        devStacksFile.parentFile?.mkdirs()
+        val obj = JSONObject()
+        state.forEach { (name, value) -> obj.put(name, value) }
+        devStacksFile.writeText(obj.toString())
+    }
+
     private suspend fun installNodeIfNeeded(
         proot: File,
         from: Float,
@@ -902,7 +996,7 @@ printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decis
         private const val NODE_VERSION = "v24.19.0"
         private const val CORE_TOOLS_VERSION = "core-bundle-2026.09.4"
         private const val SYSTEM_UPGRADE_VERSION = "ubuntu-maintenance-v1"
-        private const val CLAUDE_VERSION_PATTERN = Regex("[0-9]+\\.[0-9]+\\.[0-9]+")
+        private val CLAUDE_VERSION_PATTERN = Regex("[0-9]+\\.[0-9]+\\.[0-9]+")
         private val CORE_BUNDLE = RuntimeBundle(
             label = "Core",
             fileName = "pocketdev-core-arm64-2026.09.4.tar.zst",

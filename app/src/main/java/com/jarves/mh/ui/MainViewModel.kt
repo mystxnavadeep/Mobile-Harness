@@ -39,6 +39,7 @@ import com.jarves.mh.model.CloudBuildStatus
 import com.jarves.mh.model.ProjectDetectionResult
 import com.jarves.mh.model.ProjectDetector
 import com.jarves.mh.vercel.VercelService
+import com.jarves.mh.runtime.AndroidAppInstaller
 import com.jarves.mh.runtime.ClaudeRuntimeBridge
 import com.jarves.mh.runtime.NativeSpawnProcess
 import com.jarves.mh.runtime.RuntimeInstallProgress
@@ -754,7 +755,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 cloudBuildRunning = true,
                                 cloudBuildStatus = CloudBuildStatus.PREPARING,
                                 cloudBuildMessage = "Starting build...",
-                                cloudBuildLogsUrl = event.logsUrl,
+                                cloudBuildLogsUrl = event.workflowUrl,
                                 cloudBuildRunUrl = event.workflowUrl,
                             )
                         }
@@ -1511,7 +1512,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 activeChatId = null,
                 changes = emptyList(),
                 workspaceFiles = emptyList(),
-                androidProjectDetected = false,
+                projectType = com.jarves.mh.model.ProjectType.UNKNOWN,
+                projectDetectionDetails = emptyList(),
                 filesLoading = false,
                 isRunning = false,
                 activeSessionId = null,
@@ -1559,7 +1561,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 taskFinishedAtMillis = null,
                 changes = emptyList(),
                 workspaceFiles = emptyList(),
-                androidProjectDetected = false,
+                projectType = com.jarves.mh.model.ProjectType.UNKNOWN,
+                projectDetectionDetails = emptyList(),
                 filesLoading = true,
                 projectTerminalLines = emptyList(),
                 projectTerminalLiveOutput = "",
@@ -2184,6 +2187,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else if (current.activeSessionId != null && current.activeSessionId != event.sessionId) {
                 current
             } else when (event) {
+                // Cloud operations update their own state through service callbacks.
+                is RuntimeEvent.CloudBuildStarted,
+                is RuntimeEvent.CloudBuildProgress,
+                is RuntimeEvent.CloudBuildCompleted,
+                is RuntimeEvent.VercelDeploymentStarted,
+                is RuntimeEvent.VercelDeploymentCompleted -> current
                 is RuntimeEvent.SessionStarted -> current.copy(
                     activeSessionId = event.sessionId,
                     activity = current.activity.mapIndexed { index, item -> if (index == 0) item.copy(isComplete = true) else item },

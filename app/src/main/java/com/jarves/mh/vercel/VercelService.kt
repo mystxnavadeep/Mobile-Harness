@@ -2,6 +2,7 @@ package com.jarves.mh.vercel
 
 import com.jarves.mh.data.ApiKeyVault
 import com.jarves.mh.data.AppPreferences
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -45,7 +46,8 @@ class VercelService(private val context: android.content.Context) {
         check(response.code in 200..299) { "Failed to list projects: ${response.body}" }
         val obj = JSONObject(response.body)
         val array = obj.getJSONArray("projects")
-        return array.mapIndexed { _, proj ->
+        (0 until array.length()).map { index ->
+            val proj = array.getJSONObject(index)
             VercelProject(
                 id = proj.getString("id"),
                 name = proj.getString("name"),
@@ -180,7 +182,8 @@ class VercelService(private val context: android.content.Context) {
         check(response.code in 200..299) { "Failed to list deployments: ${response.body}" }
         val obj = JSONObject(response.body)
         val array = obj.getJSONArray("deployments")
-        return array.mapIndexed { _, dep ->
+        (0 until array.length()).map { index ->
+            val dep = array.getJSONObject(index)
             VercelDeployment(
                 id = dep.getString("id"),
                 url = dep.getString("url"),
@@ -254,7 +257,10 @@ class VercelService(private val context: android.content.Context) {
         val responseBody = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
         connection.disconnect()
         HttpResult(code, responseBody)
-    }.getOrElse { HttpResult(0, "", it.message ?: "Network error") }
+    }.getOrElse {
+        if (it is CancellationException) throw it
+        HttpResult(0, "", it.message ?: "Network error")
+    }
 
     private data class HttpResult(val code: Int, val body: String, val error: String? = null)
 }

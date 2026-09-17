@@ -8,7 +8,8 @@ import com.jarves.mh.model.GitHubRepoLink
 import com.jarves.mh.model.Project
 import com.jarves.mh.model.ProjectDetectionResult
 import com.jarves.mh.model.ProjectDetector
-import com.jarves.mh.runtime.RuntimeEvent
+import com.jarves.mh.model.RuntimeEvent
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -49,11 +50,12 @@ class VercelDeployService(private val context: Context) {
             ))
 
             // Get or create Vercel project
-            var vercelProject: VercelProject?
+            var vercelProject: VercelProject? = null
             if (vercelProjectId != null) {
                 try {
                     vercelProject = vercel.getProject(vercelProjectId)
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     // Project doesn't exist anymore, will create new
                     vercelProject = null
                 }
@@ -118,7 +120,8 @@ class VercelDeployService(private val context: Context) {
             deploymentUrl = "https://vercel.com/${vercelProject.id}/${finalDeployment.id}",
             vercelProjectId = vercelProject.id,
         )
-    }.catch { e ->
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
         val errorMessage = when {
             e.message?.contains("401") == true || e.message?.contains("Unauthorized") == true ->
                 "Vercel authentication failed (401). Check your token."
@@ -142,6 +145,7 @@ class VercelDeployService(private val context: Context) {
             deploymentUrl = null,
         ))
         VercelDeployResult.Failure(errorMessage)
+        }
     }
 }
 
